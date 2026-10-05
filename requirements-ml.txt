@@ -1,0 +1,23 @@
+# Full ML stack — install this on your own machine for best quality.
+# CPU-only works everywhere; for NVIDIA GPUs install the CUDA build of
+# torch first (see README), then this file.
+
+-r requirements.txt
+
+# torch: CPU build by default. For CUDA, install from
+# https://pytorch.org/get-started/locally/ BEFORE this file, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+torch>=2.1
+
+# Japanese manga OCR (vertical text, furigana)
+manga-ocr>=0.1.13
+
+# Multi-language OCR (~80 languages)
+easyocr>=1.7
+
+# LaMa neural inpainting (better text removal on artwork)
+simple-lama-inpainting>=0.1.2
+
+# YOLO comic text/bubble detection model
+ultralytics>=8.2
+huggingface_hub>=0.23
