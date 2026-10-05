@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Manga Translator — 漫画翻訳</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header>
+  <div class="wordmark">Manga Translator<span>漫画翻訳</span></div>
+  <div class="device-badge" id="deviceBadge">…</div>
+</header>
+
+<main>
+  <!-- ============ settings sidebar ============ -->
+  <aside class="reveal">
+    <div class="field">
+      <div class="section-label">Languages<small>言語</small></div>
+    </div>
+    <div class="field">
+      <label for="sourceLang">Source</label>
+      <select id="sourceLang"></select>
+    </div>
+    <div class="field">
+      <label for="targetLang">Translate into</label>
+      <select id="targetLang"></select>
+    </div>
+
+    <div class="field">
+      <div class="section-label">Translation<small>翻訳</small></div>
+    </div>
+    <div class="field">
+      <label for="translator">Engine</label>
+      <select id="translator">
+        <option value="auto">Auto (LLM if configured, else Google)</option>
+        <option value="llm">LLM (OpenAI-compatible)</option>
+        <option value="google">Google Translate</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <div class="section-label">Lettering<small>文字入れ</small></div>
+    </div>
+    <div class="field">
+      <label for="direction">Text direction</label>
+      <select id="direction">
+        <option value="auto">Auto</option>
+        <option value="horizontal">Horizontal</option>
+        <option value="vertical">Vertical</option>
+      </select>
+    </div>
+    <div class="field">
+      <label class="check-row"><input type="checkbox" id="uppercase" /> ALL CAPS</label>
+    </div>
+
+    <details class="advanced">
+      <summary>Advanced · 詳細</summary>
+      <div class="field">
+        <label for="device">Device</label>
+        <select id="device">
+          <option value="auto">Auto</option>
+          <option value="cpu">CPU</option>
+          <option value="cuda">GPU (CUDA)</option>
+          <option value="mps">GPU (Apple MPS)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="llmBaseUrl">LLM base URL</label>
+        <input type="text" id="llmBaseUrl" placeholder="https://api.openai.com/v1" />
+      </div>
+      <div class="field">
+        <label for="llmApiKey">LLM API key</label>
+        <input type="password" id="llmApiKey" placeholder="sk-…" />
+      </div>
+      <div class="field">
+        <label for="llmModel">LLM model</label>
+        <input type="text" id="llmModel" placeholder="gpt-4o-mini" />
+      </div>
+      <div class="field">
+        <label for="fontPath">Font file (overrides packs)</label>
+        <input type="text" id="fontPath" placeholder="fonts/en/MyFont.ttf" />
+      </div>
+    </details>
+
+    <div class="field" style="margin-top:26px">
+      <div class="section-label">Font packs<small>フォント</small></div>
+      <div class="font-packs" id="fontPacks">loading…</div>
+    </div>
+  </aside>
+
+  <!-- ============ workspace ============ -->
+  <section class="content">
+    <div class="dropzone-wrap reveal" style="animation-delay:0.08s">
+      <div class="dropzone" id="dropzone">
+        <div class="dz-title">Drop your pages here</div>
+        <div class="dz-jp">画像をドロップ</div>
+        <div class="dz-sub">single image · multiple images · a whole folder · a .zip</div>
+        <div class="dz-actions">
+          <button class="btn" data-pick="files">Choose images</button>
+          <button class="btn" data-pick="folder">Choose folder</button>
+          <button class="btn" data-pick="zip">Choose .zip</button>
+        </div>
+        <div class="dz-formats">png · jpg · webp · bmp · tiff · zip</div>
+      </div>
+    </div>
+
+    <div class="queue reveal" id="queue" style="animation-delay:0.14s">
+      <div class="queue-head">
+        <div class="queue-title">Queue · 処理</div>
+        <div class="queue-count" id="queueCount"></div>
+      </div>
+      <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+      <div class="queue-current" id="queueCurrent"></div>
+      <div class="translate-row">
+        <button class="btn primary" id="translateBtn">Translate</button>
+      </div>
+    </div>
+
+    <div class="results" id="results">
+      <div class="results-head">
+        <div class="section-label">Results<small>結果</small></div>
+        <button class="btn primary" id="downloadBtn" style="display:none">Download .zip</button>
+      </div>
+      <div class="results-grid" id="resultsGrid"></div>
+    </div>
+  </section>
+</main>
+
+<div class="lightbox" id="lightbox"><img id="lightboxImg" alt="" /></div>
+<div class="toast" id="toast"></div>
+
+<input type="file" id="pickFiles" accept="image/*" multiple hidden />
+<input type="file" id="pickFolder" webkitdirectory hidden />
+<input type="file" id="pickZip" accept=".zip" hidden />
+
+<script src="/app.js"></script>
+</body>
+</html>
