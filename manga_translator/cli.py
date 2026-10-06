@@ -131,14 +131,22 @@ def main(argv=None) -> int:
     def progress(done: int, total: int, current: str):
         print(f"\r[{done}/{total}] {current[:60]:<60}", end="", flush=True)
 
-    results = process_input(input_path, output_dir, cfg, progress=progress)
+    def page_progress(stage: str, frac: float):
+        # show the per-page stage (detecting / OCR / translating / rendering)
+        print(f"\r  {stage:<12} {int(frac * 100):>3}% " + " " * 30,
+              end="", flush=True)
+
+    results = process_input(input_path, output_dir, cfg, progress=progress,
+                            page_progress=page_progress)
     print()
 
     ok = [r for r in results if not r.error]
     failed = [r for r in results if r.error]
     for r in ok:
         n = len(r.regions)
-        print(f"  ✓ {Path(r.source_path).name} -> {r.output_path}  ({n} text regions)")
+        nt = sum(1 for x in r.regions if x.text and x.translation)
+        print(f"  ✓ {Path(r.source_path).name} -> {r.output_path}  "
+              f"({n} text regions, {nt} translated)")
     for r in failed:
         print(f"  ✗ {Path(r.source_path).name}: {r.error}", file=sys.stderr)
 

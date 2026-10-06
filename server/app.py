@@ -33,7 +33,8 @@ class Job:
         self.id = job_id
         self.cfg = cfg
         self.status = "queued"          # queued | running | done | error
-        self.stage = ""
+        self.stage = ""                 # current per-page stage label
+        self.stage_frac = 0.0           # 0..1 within the current page
         self.total = 0
         self.done = 0
         self.current = ""
@@ -46,6 +47,7 @@ class Job:
     def to_dict(self) -> dict:
         return {
             "id": self.id, "status": self.status, "stage": self.stage,
+            "stage_frac": self.stage_frac,
             "total": self.total, "done": self.done, "current": self.current,
             "error": self.error, "results": self.results,
         }
@@ -58,19 +60,31 @@ def _run_job(job: Job):
 
         def progress(done, total, current):
             job.done, job.total, job.current = done, total, current
+            if done >= total and total:
+                job.stage, job.stage_frac = "finished", 1.0
 
-        results = process_input(input_path, job.output_dir, job.cfg, progress=progress)
+        def page_progress(stage, frac):
+            # called from the pipeline for each page — this is what makes the
+            # UI actually show "translating…" instead of a frozen bar
+            job.stage, job.stage_frac = stage, frac
+
+        results = process_input(input_path, job.output_dir, job.cfg,
+                                progress=progress, page_progress=page_progress)
         job.done = job.total = len(results)
+        job.stage, job.stage_frac = "finished", 1.0
         for r in results:
             if r.error:
                 job.results.append({"src": Path(r.source_path).name, "error": r.error})
             elif r.output_path:
                 rel = str(Path(r.output_path).relative_to(job.output_dir))
+                translated_n = sum(1 for x in r.regions
+                                   if x.text and x.translation and x.translation != x.text)
                 job.results.append({
                     "src": Path(r.source_path).name,
                     "out": rel,
                     "url": f"/api/jobs/{job.id}/files/{rel}",
                     "regions": len(r.regions),
+                    "translated": translated_n,
                     "texts": [{"src": x.text, "tgt": x.translation} for x in r.regions if x.text],
                 })
         failures = [r for r in job.results if "error" in r]
