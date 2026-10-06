@@ -10,7 +10,7 @@ import json
 import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL_DIR = PROJECT_ROOT / "models"
@@ -48,13 +48,27 @@ TARGET_LANGUAGES = {k: v for k, v in SUPPORTED_LANGUAGES.items() if k != "auto"}
 
 @dataclass
 class TranslatorConfig:
-    """LLM endpoint settings (OpenAI-compatible)."""
+    """LLM endpoint settings (OpenAI-compatible).
+
+    Bring your own key: set these in the web UI (saved to config.json), pass
+    them on the CLI, or export MT_LLM_API_KEY / MT_LLM_BASE_URL / MT_LLM_MODEL.
+    Any OpenAI-compatible server works — OpenAI, DeepSeek, Moonshot/Kimi,
+    OpenRouter, Groq, an Azure ``.../openai/deployments/<model>/chat/completions?api-version=...``
+    URL, or a local llama.cpp / LM Studio / Ollama server.
+    """
     base_url: str = field(default_factory=lambda: os.environ.get(
         "MT_LLM_BASE_URL", "https://api.openai.com/v1"))
     api_key: str = field(default_factory=lambda: os.environ.get("MT_LLM_API_KEY", ""))
     model: str = field(default_factory=lambda: os.environ.get("MT_LLM_MODEL", "gpt-4o-mini"))
     temperature: float = 0.3
     max_retries: int = 2
+    # Google Translate fallbacks used when the free endpoint rate-limits us.
+    # The first one that answers wins; a key-bearing endpoint never 429s.
+    google_fallback_urls: List[str] = field(default_factory=lambda: [
+        "https://translate.googleapis.com/translate_a/single",
+        "https://translate-pa.googleapis.com/v1/translateHtml",
+    ])
+    google_api_key: str = field(default_factory=lambda: os.environ.get("MT_GOOGLE_API_KEY", ""))
 
 
 @dataclass

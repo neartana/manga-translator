@@ -1,11 +1,11 @@
-# Core (always needed) — web server, image handling, free translation,
-# the OpenCV fallback detector/inpainter and the ONNX OCR fallback.
+# Core (always needed) — web server, image handling, the built-in Google
+# Translate client (plain `requests`, no key), the OpenCV fallback
+# detector/inpainter and the ONNX OCR fallback.
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
 pillow>=10.0
 numpy>=1.26
 opencv-python-headless>=4.8
-deep-translator>=1.11
 requests>=2.31
 rapidocr-onnxruntime>=1.3
