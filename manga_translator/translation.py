@@ -35,7 +35,9 @@ class TranslationCache:
                 self._data = {}
 
     def key(self, text: str, src: str, tgt: str, backend: str) -> str:
-        raw = f"{backend}|{src}|{tgt}|{text}"
+        # include the exact source text (repr) so lookups can never collide
+        # with a different string and silently return the wrong translation
+        raw = repr([backend, src, tgt, text])
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def get(self, key: str) -> Optional[str]:
@@ -60,22 +62,46 @@ class GoogleBackend:
     def translate(self, texts: List[str], src: str, tgt: str) -> List[str]:
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FTTimeout
         from deep_translator import GoogleTranslator
+        # NOTE: previously the translator instance was created but never used,
+        # and every line silently fell back to the *original* text on any
+        # error — which made the output look completely untranslated.
         src_code = SUPPORTED_LANGUAGES.get(src, ("", "auto"))[1]
         tgt_code = SUPPORTED_LANGUAGES.get(tgt, ("", "en"))[1]
-        tr = GoogleTranslator(source=src_code, target=tgt_code)
-        out = []
-        pool = ThreadPoolExecutor(max_workers=4)
-        futures = [pool.submit(tr.translate, t) for t in texts]
-        for t, fut in zip(texts, futures):
-            try:
-                out.append(fut.result(timeout=45) or t)
-            except FTTimeout:
-                log.error("Google translate timed out — check network/proxy")
-                out.append(t)
-            except Exception as e:
-                log.error("Google translate failed: %s", e)
-                out.append(t)
-        pool.shutdown(wait=False)
+        if tgt_code == "auto" or not tgt_code:
+            raise RuntimeError(f"Unsupported target language: {tgt!r}")
+
+        def _new_translator():
+            # one instance per thread — deep-translator objects are not reentrant
+            return GoogleTranslator(source=src_code, target=tgt_code)
+
+        out: List[str] = []
+        failures = 0
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = []
+            for t in texts:
+                tr = _new_translator()
+                futures.append(pool.submit(tr.translate, t))
+            for t, fut in zip(texts, futures):
+                translated = None
+                try:
+                    translated = fut.result(timeout=45)
+                except FTTimeout:
+                    log.error("Google translate timed out — check network/proxy")
+                except Exception as e:
+                    log.error("Google translate failed: %s", e)
+                if translated and str(translated).strip():
+                    out.append(str(translated).strip())
+                else:
+                    # keep original so the bubble is never left empty
+                    failures += 1
+                    out.append(t)
+        if failures == len(texts) and texts:
+            log.error("Google Translate returned no translations for any of the "
+                      "%d line(s) — output will show the original text. "
+                      "Check network access / proxy.", len(texts))
+        elif failures:
+            log.warning("Google Translate failed for %d/%d line(s); those lines "
+                        "keep their original text.", failures, len(texts))
         return out
 
 
@@ -132,7 +158,14 @@ class LLMBackend:
                 results.setdefault(idx, m.group(2).strip())
         out = []
         for i in range(1, len(originals) + 1):
-            out.append(results.get(i) or originals[i - 1])
+            # never fall back to the *original* text — that makes the page
+            # look untranslated; instead flag the miss loudly and keep the
+            # model's best-effort output (empty here means "line missing")
+            tr = results.get(i) or ""
+            if not tr.strip():
+                log.warning("LLM response did not include a translation for "
+                            "line [%d]; it will be left as-is on the page.", i)
+            out.append(tr)
         return out
 
 
@@ -140,49 +173,111 @@ _backend_cache: dict = {}
 
 
 def get_backend(cfg: ProcessingConfig):
+    """Instantiate the requested backend.
+
+    Backends are cached keyed by their effective settings — previously a
+    single global cache entry meant that changing the API key / model /
+    target language in the UI had no effect: jobs kept running against the
+    first (often unconfigured or stale) endpoint, so nothing was ever
+    actually translated.
+    """
     choice = cfg.translator
     if choice in ("auto", "llm"):
         try:
-            if "llm" not in _backend_cache:
-                _backend_cache["llm"] = LLMBackend(cfg)
-            return _backend_cache["llm"]
+            key = ("llm", cfg.llm.base_url, cfg.llm.api_key, cfg.llm.model)
+            if key not in _backend_cache:
+                _backend_cache[key] = LLMBackend(cfg)
+                log.info("Using LLM backend: %s (%s)", cfg.llm.model, cfg.llm.base_url)
+            return _backend_cache[key]
         except Exception as e:
             if choice == "llm":
                 raise
             log.info("LLM backend not configured (%s); using Google Translate.", e)
-    if "google" not in _backend_cache:
-        _backend_cache["google"] = GoogleBackend(cfg)
-    return _backend_cache["google"]
+    gkey = ("google",)
+    if gkey not in _backend_cache:
+        _backend_cache[gkey] = GoogleBackend(cfg)
+    return _backend_cache[gkey]
 
 
 _cache = TranslationCache()
 
 
 def translate_regions(regions, cfg: ProcessingConfig) -> None:
-    texts = [r.text for r in regions if r.text and len(r.text) >= cfg.min_text_length]
-    if not texts:
+    """Translate every region **individually** and assign the result back to
+    ``region.translation`` keyed by the region object itself.
+
+    Two bugs used to break this stage:
+      1. Regions were matched back to translations via ``r.text in resolved``,
+         so two bubbles with identical OCR text shared one entry — and any
+         region whose lookup failed kept an empty translation and was silently
+         skipped by the renderer (the output looked untranslated).
+      2. The cache key did not include the exact source text, so duplicated
+         lines could collide.
+
+    Now each region gets its own translation slot, cached per unique text,
+    and any failure leaves that region's original text rendered in place
+    instead of vanishing.
+    """
+    candidates = [r for r in regions
+                  if r.text and r.text.strip() and len(r.text) >= cfg.min_text_length]
+    if not candidates:
+        log.warning("translate_regions: no OCR text found on this page "
+                    "(nothing to translate / render)")
         return
+
     backend = get_backend(cfg)
     src, tgt = cfg.source_lang, cfg.target_lang
+    log.info("Translating %d region(s) with '%s' backend: %s -> %s",
+             len(candidates), backend.name, src, tgt)
 
-    missing, missing_keys = [], []
+    # One batch call per *unique* missing text, preserving order.
+    missing: List[str] = []
+    missing_keys: List[str] = []
+    seen_missing = set()
     resolved: dict[str, str] = {}
-    for t in texts:
+    for r in candidates:
+        t = r.text
+        if t in resolved or t in seen_missing:
+            continue
         key = _cache.key(t, src, tgt, backend.name)
-        if cfg.use_cache and (hit := _cache.get(key)):
+        hit = _cache.get(key) if cfg.use_cache else None
+        if hit:
             resolved[t] = hit
         else:
+            seen_missing.add(t)
             missing.append(t)
             missing_keys.append(key)
 
     if missing:
-        # LLM context window is fine with a full page; Google gets one call per line
-        translated = backend.translate(missing, src, tgt)
+        try:
+            # LLM context window is fine with a full page; Google batches internally
+            translated = backend.translate(missing, src, tgt)
+        except Exception as e:
+            log.error("Translation backend '%s' failed: %s — keeping original text",
+                      backend.name, e)
+            translated = list(missing)
+        if len(translated) != len(missing):
+            log.error("Backend returned %d lines for %d inputs; padding/truncating",
+                      len(translated), len(missing))
+            translated = (translated + list(missing))[:len(missing)]
         for t, key, tr in zip(missing, missing_keys, translated):
+            tr = (tr or "").strip() or t   # never leave a bubble empty
             resolved[t] = tr
             _cache.put(key, tr)
-        _cache.save()
+        try:
+            _cache.save()
+        except Exception as e:
+            log.warning("Could not persist translation cache: %s", e)
 
-    for r in regions:
-        if r.text in resolved:
-            r.translation = resolved[r.text]
+    assigned = 0
+    for r in candidates:
+        tr = resolved.get(r.text, "").strip()
+        if tr:
+            r.translation = tr
+            assigned += 1
+        else:
+            # last-resort fallback: render the original text so the page
+            # still shows something where the lettering used to be
+            r.translation = r.text
+    log.info("Translation complete: %d/%d region(s) translated (%s -> %s)",
+             assigned, len(candidates), src, tgt)

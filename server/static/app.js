@@ -101,14 +101,34 @@ async function startJob() {
 }
 
 async function pollJob() {
-  const job = await (await fetch(`/api/jobs/${state.jobId}`)).json();
+  let job;
+  try {
+    const res = await fetch(`/api/jobs/${state.jobId}`);
+    if (!res.ok) throw new Error(await res.text());
+    job = await res.json();
+  } catch (e) {
+    $("queueCurrent").textContent = "status check failed: " + e.message;
+    return;                                   // keep polling — don't die silently
+  }
   $("queueCount").textContent = job.total ? `${job.done} / ${job.total}` : "…";
-  $("queueCurrent").textContent = job.current || job.stage || job.status;
-  setProgress(job.total ? (job.done / job.total) * 100 : 5);
+
+  const stage = job.stage || job.status;
+  $("queueCurrent").textContent = stage;
+  $("stageLabel").textContent = stage ? `· ${stage}` : "";
+
+  // smooth progress: page completion + fraction through the current page's stages
+  if (job.total) {
+    const frac = Math.min(1, Math.max(0, job.stage_frac || 0));
+    setProgress(((job.done + (job.done < job.total ? frac * 0.99 : 0)) / job.total) * 100);
+  } else if (job.status === "running") {
+    setProgress(5);                           // moving, but total not known yet
+  }
 
   if (job.status === "done" || job.status === "error") {
     clearInterval(state.poll);
+    state.poll = null;
     $("translateBtn").disabled = false;
+    $("stageLabel").textContent = "";
     setProgress(job.status === "done" ? 100 : 0);
     if (job.status === "error") return toast(job.error || "Job failed");
     renderResults(job);
@@ -142,13 +162,14 @@ function renderResults(job) {
       const pairs = (r.texts || [])
         .map((t) => `<div class="pair"><div class="src">${esc(t.src)}</div><div class="tgt">${esc(t.tgt)}</div></div>`)
         .join("");
+      const untranslated = (r.texts || []).filter((t) => t.src && t.tgt === t.src).length;
       tile.innerHTML = `
         <img src="${r.url}" alt="${r.src}" loading="lazy" />
         <div class="tile-meta">
           <span class="tile-name" title="${r.out}">${r.out}</span>
-          <span>${r.regions} region${r.regions === 1 ? "" : "s"}</span>
+          <span>${r.translated ?? r.regions}/${r.regions} translated${untranslated ? ` · <b style="color:#e0a940">${untranslated} kept original</b>` : ""}</span>
         </div>
-        ${pairs ? `<div class="tile-texts">${pairs}</div>` : ""}`;
+        ${pairs ? `<div class="tile-texts">${pairs}</div>` : "<div class=\"tile-texts on\"><div class=\"pair\"><div class=\"src\">No text detected on this page</div></div></div>"}`;
       tile.querySelector("img").addEventListener("click", () => openLightbox(r.url));
       if (pairs) {
         const meta = tile.querySelector(".tile-meta");

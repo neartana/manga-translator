@@ -20,6 +20,7 @@ from .utils import PageResult, collect_images, extract_zip, is_image
 log = logging.getLogger("manga_translator")
 
 BatchProgress = Optional[Callable[[int, int, str], None]]  # (done, total, current file)
+PageProgress = Optional[Callable[[str, float], None]]      # (stage, fraction within page)
 
 
 def _output_name(src: Path, cfg: ProcessingConfig) -> Path:
@@ -29,7 +30,8 @@ def _output_name(src: Path, cfg: ProcessingConfig) -> Path:
 
 
 def process_input(input_path: Path, output_dir: Path, cfg: ProcessingConfig,
-                  progress: BatchProgress = None) -> List[PageResult]:
+                  progress: BatchProgress = None,
+                  page_progress: PageProgress = None) -> List[PageResult]:
     """Translate a single image, a folder, or a zip of images/folders."""
     pipeline = TranslationPipeline(cfg)
     results: List[PageResult] = []
@@ -74,7 +76,7 @@ def process_input(input_path: Path, output_dir: Path, cfg: ProcessingConfig,
                     debug_dir = (dst.parent / f".debug_{src.stem}") if cfg.save_intermediates else None
                     regions = pipeline.process_file(
                         src, dst,
-                        progress=lambda stage, frac: None,
+                        progress=page_progress,
                         debug_dir=debug_dir)
                     if not regions and cfg.skip_no_text:
                         if dst.exists():
