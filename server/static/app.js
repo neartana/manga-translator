@@ -203,3 +203,36 @@ function toast(msg) {
 }
 
 loadMeta();
+
+/* ---------------- test LLM connection ---------------- */
+$("testConnBtn").addEventListener("click", async () => {
+  const out = $("testConnResult");
+  const btn = $("testConnBtn");
+  btn.disabled = true;
+  out.textContent = "Testing…";
+  out.style.color = "";
+  try {
+    const r = await fetch("/api/test-connection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        llm_api_key: $("llmApiKey").value,
+        llm_base_url: $("llmBaseUrl").value,
+        llm_model: $("llmModel").value,
+      }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      out.textContent = "✓ Connected (" + j.reply.slice(0, 40) + ")";
+      out.style.color = "#2e7d32";
+    } else {
+      out.textContent = "✗ " + j.error;
+      out.style.color = "#c62828";
+    }
+  } catch (e) {
+    out.textContent = "✗ Network error: " + e;
+    out.style.color = "#c62828";
+  } finally {
+    btn.disabled = false;
+  }
+});

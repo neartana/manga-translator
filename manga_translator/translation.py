@@ -149,6 +149,47 @@ class GoogleBackend:
         raise TranslationError(
             f"Google Translate request failed: {last_err}", detail=str(last_err))
 
+    # -- free community mirrors ---------------------------------------------
+    MIRROR_LANG_MAP = {"zh-cn": "zh", "zh-tw": "zh", "he": "iw"}
+
+    def _mirror_translate(self, texts: List[str], src: str, tgt: str):
+        """Last-resort fallback MTs when every Google endpoint 429s us.
+
+        MyMemory allows batched POSTs (one request for the whole chunk) and is
+        generous with rate limits; LibreTranslate instances are tried per-line.
+        Returns None if no mirror could serve the request.
+        """
+        import requests
+        mm_src = self.MIRROR_LANG_MAP.get(src, src)
+        mm_tgt = self.MIRROR_LANG_MAP.get(tgt, tgt)
+        try:
+            joined = "\n\x01\n".join(texts)
+            r = requests.post("https://api.mymemory.translated.net/get",
+                              data={"q": joined, "langpair": f"{mm_src}|{mm_tgt}"},
+                              timeout=(6.05, 30))
+            if r.status_code == 200:
+                got = (r.json().get("responseData") or {}).get("translatedText") or ""
+                parts = [p.strip() for p in got.split("\x01")]
+                if len(parts) == len(texts) and all(parts):
+                    return parts
+                log.debug("MyMemory mirror shape mismatch: %d parts", len(parts))
+        except Exception as e:
+            log.debug("MyMemory mirror failed: %s", e)
+        try:
+            out = []
+            for t in texts[:50]:                      # per-line API, cap it
+                r = requests.post("https://libretranslate.com/translate",
+                                  json={"q": t, "source": mm_src, "target": mm_tgt,
+                                        "format": "text"}, timeout=10)
+                if r.status_code != 200:
+                    raise RuntimeError(f"HTTP {r.status_code}")
+                out.append((r.json().get("translatedText") or "").strip())
+            if len(out) == len(texts) and all(out):
+                return out
+        except Exception as e:
+            log.debug("LibreTranslate mirror failed: %s", e)
+        return None
+
     @staticmethod
     def _parse_payload(data, expected: int) -> List[str]:
         """Parse the gtx JSON array-of-arrays response into one string per q."""
@@ -176,14 +217,27 @@ class GoogleBackend:
             raise TranslationError(f"Unsupported target language: {tgt!r}")
 
         out: List[str] = []
-        for i in range(0, len(texts), self.CHUNK):
+        try:
+            chunks = [self._request(texts[i:i + self.CHUNK], src_code, tgt_code)
+                      for i in range(0, len(texts), self.CHUNK)]
+        except TranslationError as e:
+            mirrored = self._mirror_translate(texts, src_code, tgt_code)
+            if mirrored is not None:
+                log.info("Google endpoints failed (%s); used free mirror MT.", e)
+                return mirrored
+            raise
+        for got, i in ((c, i) for c, i in zip(chunks, range(0, len(texts), self.CHUNK))):
             chunk = texts[i:i + self.CHUNK]
-            got = self._request(chunk, src_code, tgt_code)
             if len(got) < len(chunk):
                 got += [""] * (len(chunk) - len(got))
             out.extend(g[:len(chunk)])
+        # If the whole batch came back empty or google hard-failed earlier,
+        # fall through to free community mirrors before giving up.
         missing = sum(1 for t, tr in zip(texts, out) if not (tr or "").strip())
         if missing == len(texts) and texts:
+            mirrored = self._mirror_translate(texts, src_code, tgt_code)
+            if mirrored is not None:
+                return mirrored
             raise TranslationError(
                 "Google Translate returned no translations (it may be "
                 "rate-limiting this server)")
