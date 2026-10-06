@@ -1,0 +1,8 @@
+{
+  "llm": {
+    "google_fallback_urls": [
+      "https://translate.googleapis.com/translate_a/single",
+      "https://clients5.google.com/translate_a/t"
+    ]
+  }
+}

@@ -13,9 +13,10 @@ import zipfile
 from pathlib import Path
 from typing import Dict, List
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from manga_translator.batch import process_input, zip_results
 from manga_translator.config import (ProcessingConfig, SUPPORTED_LANGUAGES,
@@ -176,6 +177,26 @@ def create_app() -> FastAPI:
         jobs[job_id] = job
         threading.Thread(target=_run_job, args=(job,), daemon=True).start()
         return {"job_id": job_id}
+
+    @app.post("/api/test-connection")
+    def test_connection(body: dict = Body(...)):
+        """Ping the user's AI endpoint so a bad key/URL/model fails fast."""
+        from manga_translator.config import TranslatorConfig
+        from manga_translator.translation import test_llm_connection, TranslationError
+        base = ProcessingConfig.load()
+        tc = TranslatorConfig(
+            base_url=str(body.get("llm_base_url") or "") or base.llm.base_url,
+            api_key=str(body.get("llm_api_key") or "") or base.llm.api_key,
+            model=str(body.get("llm_model") or "") or base.llm.model,
+        )
+        try:
+            reply = test_llm_connection(tc)
+            return {"ok": True, "reply": reply}
+        except TranslationError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=200)
+        except Exception as e:  # network errors etc.
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"},
+                                status_code=200)
 
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str):
